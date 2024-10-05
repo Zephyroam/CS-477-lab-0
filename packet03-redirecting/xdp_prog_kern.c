@@ -67,6 +67,16 @@ static __always_inline __u16 csum_fold_helper(__u32 csum)
 	sum += (sum >> 16);
 	return ~sum;
 }
+static __always_inline __u16 icmp_checksum_diff(
+		__u16 seed,
+		struct icmphdr_common *icmphdr,
+		struct icmphdr_common *prev_icmphdr)
+{
+	__u32 csum, size = sizeof(struct icmphdr_common);
+
+	csum = bpf_csum_diff((unsigned int *)prev_icmphdr, size, (unsigned int *)icmphdr, size, seed);
+	return csum_fold_helper(csum);
+}
 
 /* Implement packet03/assignment-1 in this section */
 SEC("xdp")
@@ -128,14 +138,12 @@ int xdp_icmp_echo_func(struct xdp_md *ctx)
 	/* Assignment 1: patch the packet and update the checksum. You can use
 	 * the echo_reply variable defined above to fix the ICMP Type field. */
 
-	bpf_printk("echo_reply: %d", echo_reply);
 	unsigned short prev_cksum = icmphdr->cksum;
 	struct icmphdr_common prev_icmphdr;
-	icmphdr->type = echo_reply;
 	icmphdr->cksum = 0;
 	prev_icmphdr = *icmphdr;
-	icmphdr->cksum = bpf_csum_diff((unsigned int *)&prev_icmphdr, sizeof(prev_icmphdr), (unsigned int *)&icmphdr, sizeof(*icmphdr), ~prev_cksum);
-	icmphdr->cksum = csum_fold_helper(icmphdr->cksum);
+	icmphdr->type = echo_reply;
+	icmphdr->cksum = icmp_checksum_diff(~prev_cksum, icmphdr, &prev_icmphdr);
 
 	action = XDP_TX;
 
@@ -155,8 +163,8 @@ int xdp_redirect_func(struct xdp_md *ctx)
 	struct ethhdr *eth;
 	int eth_type;
 	int action = XDP_PASS;
-	unsigned char dst[ETH_ALEN] = {}; 	/* Assignment 2: fill in with the MAC address of the left inner interface */
-	unsigned ifindex = 0; 		/* Assignment 2: fill in with the ifindex of the left interface */
+	unsigned char dst[ETH_ALEN] = {0x2e,0x7d,0xf6,0x80,0xf9,0x26}; 	/* Assignment 2: fill in with the MAC address of the left inner interface */
+	unsigned ifindex = 6; 		/* Assignment 2: fill in with the ifindex of the left interface */
 
 	/* These keep track of the next header type and iterator pointer */
 	nh.pos = data;
@@ -218,6 +226,12 @@ static __always_inline int ip_decrease_ttl(struct iphdr *iph)
 	iph->check = (__u16)(check + (check >= 0xFFFF));
 	return --iph->ttl;
 }
+
+
+#undef AF_INET
+#define AF_INET 2
+#undef AF_INET6
+#define AF_INET6 10
 
 /* Assignment 4: Complete this router program */
 SEC("xdp")
